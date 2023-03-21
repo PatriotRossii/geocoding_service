@@ -17,9 +17,9 @@ void Geocoding::forward(const HttpRequestPtr& req, std::function<void (const Htt
         auto client = HttpClient::newHttpClient("https://catalog.api.2gis.com/3.0/items/geocode");
 
         auto request = HttpRequest::newHttpRequest();
-        request->setParameter("q", req->getParameter("q"));
+        request->setParameter("q", q);
         request->setParameter("fields", "items.point");
-        request->setParameter("key", req->getParameter("key"));
+        request->setParameter("key", key);
 
 
         client->sendRequest(
