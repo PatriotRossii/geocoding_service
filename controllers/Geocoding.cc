@@ -1,10 +1,15 @@
 #include "Geocoding.h"
 
-#include <utility>
-
+#include <drogon/utils/coroutine.h>
 #include <drogon/drogon.h>
 
-void Geocoding::forward(const HttpRequestPtr& req, std::function<void (const HttpResponsePtr &)> &&callback)
+#include <string>
+#include <utility>
+
+#include "utils/RedisCache.h"
+#include "utils/StringFunctions.h"
+
+drogon::AsyncTask Geocoding::forward(HttpRequestPtr req, std::function<void (const HttpResponsePtr &)> callback)
 {
     auto [q, key] = std::tie(
         req->getParameter("q"), req->getParameter("key")
@@ -21,24 +26,44 @@ void Geocoding::forward(const HttpRequestPtr& req, std::function<void (const Htt
         request->setParameter("fields", "items.point");
         request->setParameter("key", key);
 
+        std::string cacheKey(q);
+        Json::Value point;
+        auto redisPtr = drogon::app().getFastRedisClient();
 
-        client->sendRequest(
-            request, [&response_json](ReqResult result, const HttpResponsePtr &response) {
-                Json::Reader reader;
-                Json::Value api_json(response->getBody().data());
-                bool parsingSuccessful = reader.parse(response->getBody().data(), api_json);
+        std::string cacheValue;
+        bool updateCachePending = false;
 
-                bool geocodingSuccessful = 
-                    (api_json["meta"]["code"].asInt() != 200)
-                        && (api_json["result"]["total"].asInt() != 0);
-                if (!parsingSuccessful || !geocodingSuccessful) {
-                    return;
+        try {
+            auto cachePoint = co_await getFromCache<std::string>(cacheKey, redisPtr);
+            auto splitPoint = split(cachePoint, '_');
+            point["lat"] = std::stod(splitPoint[0]), point["lon"] = std::stod(splitPoint[1]);
+        } catch (std::exception &err) {
+            client->sendRequest(
+                request, [&](ReqResult result, const HttpResponsePtr &response) {
+                    Json::Reader reader;
+                    Json::Value api_json(response->getBody().data());
+                    
+                    bool parsingSuccessful = reader.parse(response->getBody().data(), api_json);
+                    bool geocodingSuccessful = 
+                        (api_json["meta"]["code"].asInt() != 200)
+                            && (api_json["result"]["total"].asInt() != 0);
+                    if (!parsingSuccessful || !geocodingSuccessful) {
+                        return;
+                    }
+
+                    point["lat"] = api_json["result"]["items"][0]["point"]["lat"].asInt();
+                    point["lon"] = api_json["result"]["items"][0]["point"]["lon"].asInt();
                 }
+            );
+            cacheValue = std::string(point["lat"].asString()) + "_" + std::string(point["lon"].asString());
+            updateCachePending = true;
+        }
 
-                response_json["status"] = "ok";
-                response_json["result"] = api_json["result"]["items"][0]["full_name"].asString();
-            }
-        );
+        if (updateCachePending)
+            co_await updateCache(cacheKey, cacheValue, redisPtr);
+
+        response_json["status"] = "ok";
+        response_json["result"] = point;
     }
 
     callback(HttpResponse::newHttpJsonResponse(response_json));
@@ -61,13 +86,15 @@ void Geocoding::reverse(const HttpRequestPtr& req, std::function<void (const Htt
         request->setParameter("lon", lon);
         request->setParameter("key", key);
 
+        std::string key = std::string(lat) + "_" + std::string(lon);
+        auto redisPtr = drogon::app().getFastRedisClient();
 
         client->sendRequest(
             request, [&response_json](ReqResult result, const HttpResponsePtr &response) {
                 Json::Reader reader;
                 Json::Value api_json(response->getBody().data());
-                bool parsingSuccessful = reader.parse(response->getBody().data(), api_json);
 
+                bool parsingSuccessful = reader.parse(response->getBody().data(), api_json);
                 bool geocodingSuccessful = 
                     (api_json["meta"]["code"].asInt() != 200)
                         && (api_json["result"]["total"].asInt() != 0);

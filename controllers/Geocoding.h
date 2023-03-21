@@ -12,6 +12,6 @@ class Geocoding : public drogon::HttpController<Geocoding>
     METHOD_ADD(Geocoding::reverse, "/reverse", Get);
     METHOD_LIST_END
 
-    void forward(const HttpRequestPtr& req, std::function<void (const HttpResponsePtr &)> &&callback);
+    drogon::AsyncTask forward(HttpRequestPtr req, std::function<void (const HttpResponsePtr &)> callback);
     void reverse(const HttpRequestPtr& req, std::function<void (const HttpResponsePtr &)> &&callback);
 };
