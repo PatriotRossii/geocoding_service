@@ -69,7 +69,7 @@ drogon::AsyncTask Geocoding::forward(HttpRequestPtr req, std::function<void (con
     callback(HttpResponse::newHttpJsonResponse(response_json));
 }
 
-void Geocoding::reverse(const HttpRequestPtr& req, std::function<void (const HttpResponsePtr &)> &&callback)
+drogon::AsyncTask Geocoding::reverse(HttpRequestPtr req, std::function<void (const HttpResponsePtr &)> callback)
 {
     auto [lat, lon, key] = std::tie(
         req->getParameter("lat"), req->getParameter("lon"), req->getParameter("key")
@@ -86,26 +86,38 @@ void Geocoding::reverse(const HttpRequestPtr& req, std::function<void (const Htt
         request->setParameter("lon", lon);
         request->setParameter("key", key);
 
-        std::string key = std::string(lat) + "_" + std::string(lon);
+        std::string cacheKey = std::string(lat) + "_" + std::string(lon);
         auto redisPtr = drogon::app().getFastRedisClient();
 
-        client->sendRequest(
-            request, [&response_json](ReqResult result, const HttpResponsePtr &response) {
-                Json::Reader reader;
-                Json::Value api_json(response->getBody().data());
+        std::string cacheValue;
+        bool updateCachePending = false;
 
-                bool parsingSuccessful = reader.parse(response->getBody().data(), api_json);
-                bool geocodingSuccessful = 
-                    (api_json["meta"]["code"].asInt() != 200)
-                        && (api_json["result"]["total"].asInt() != 0);
-                if (!parsingSuccessful || !geocodingSuccessful) {
-                    return;
+        try {
+            response_json["result"] = co_await getFromCache<std::string>(cacheKey, redisPtr);
+        } catch (std::exception &err) {
+            client->sendRequest(
+                request, [&response_json](ReqResult result, const HttpResponsePtr &response) {
+                    Json::Reader reader;
+                    Json::Value api_json(response->getBody().data());
+
+                    bool parsingSuccessful = reader.parse(response->getBody().data(), api_json);
+                    bool geocodingSuccessful = 
+                        (api_json["meta"]["code"].asInt() != 200)
+                            && (api_json["result"]["total"].asInt() != 0);
+                    if (!parsingSuccessful || !geocodingSuccessful) {
+                        return;
+                    }
+
+                    response_json["status"] = "ok";
+                    response_json["result"] = api_json["result"]["items"][0]["full_name"].asString();
                 }
+            );
+            cacheValue = response_json["result"].asString();;
+            updateCachePending = true;
+        }
 
-                response_json["status"] = "ok";
-                response_json["result"] = api_json["result"]["items"][0]["point"];
-            }
-        );
+        if (updateCachePending)
+            co_await updateCache(cacheKey, cacheValue, redisPtr);
     }
 
     callback(HttpResponse::newHttpJsonResponse(response_json));
