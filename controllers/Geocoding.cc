@@ -28,12 +28,15 @@ void Geocoding::forward(const HttpRequestPtr& req, std::function<void (const Htt
                 Json::Value api_json(response->getBody().data());
                 bool parsingSuccessful = reader.parse(response->getBody().data(), api_json);
 
-                if (!parsingSuccessful || api_json["meta"]["code"].asInt() != 200) {
+                bool geocodingSuccessful = 
+                    (api_json["meta"]["code"].asInt() != 200)
+                        && (api_json["result"]["total"].asInt() != 0);
+                if (!parsingSuccessful || !geocodingSuccessful) {
                     return;
                 }
 
                 response_json["status"] = "ok";
-                response_json["result"] = api_json["result"];
+                response_json["result"] = api_json["result"]["items"][0]["full_name"].asString();
             }
         );
     }
@@ -65,12 +68,15 @@ void Geocoding::reverse(const HttpRequestPtr& req, std::function<void (const Htt
                 Json::Value api_json(response->getBody().data());
                 bool parsingSuccessful = reader.parse(response->getBody().data(), api_json);
 
-                if (!parsingSuccessful || api_json["meta"]["code"].asInt() != 200) {
+                bool geocodingSuccessful = 
+                    (api_json["meta"]["code"].asInt() != 200)
+                        && (api_json["result"]["total"].asInt() != 0);
+                if (!parsingSuccessful || !geocodingSuccessful) {
                     return;
                 }
 
                 response_json["status"] = "ok";
-                response_json["result"] = api_json["result"];
+                response_json["result"] = api_json["result"]["items"][0]["point"];
             }
         );
     }
